@@ -57,6 +57,7 @@ declares — created directly, no legacy instance, no pre-hook, no bind:
 | `grants.tf` | `databricks_grant` (system read for the deployer) | infra `catalog.tf` system grants |
 | `permissions.tf` | `databricks_permissions` (`database_project_name`) | the project `permissions:` block |
 | `posthook.tf` + `src/*.py` | `databricks_notebook` + `databricks_job` | the DABs `setup_data_role` / `setup_dataapi_role` jobs |
+| `scripts/posthook.py` | bundle-free post-hook orchestrator | `lakebase_prehook.py --phase post` |
 | `.github/workflows/deploy.yml` | GitHub Actions | the DABs GitHub pipeline |
 
 The project auto-creates its `production` branch and primary read-write endpoint;
@@ -68,20 +69,27 @@ compute window declaratively.
 Terraform can't run SQL inside Postgres, so the per-table GRANTs stay a job — but
 that job is deployed *by* Terraform (`posthook.tf` imports `src/*.py` as notebooks
 and wraps each in a parameterized `databricks_job`). `.github/workflows/deploy.yml`
-does the two-phase deploy, exactly mirroring the DABs pre-hook + bundle + post-hook
-split:
+does the two-phase deploy, mirroring the DABs pre-hook + post-hook split:
 
 1. **`terraform apply`** — project, endpoint, catalog, synced table, Data API,
    roles, ACLs (everything declarative).
-2. **post-hook** — `jobs run-now` on the two deployed jobs, fed from
-   `terraform output`, to run the residual data-plane GRANTs:
-   - `setup_data_role` → `GRANT SELECT … TO` the developer group role
+2. **post-hook** — `scripts/posthook.py --from-terraform`, a **bundle-free port of
+   sh-lakebase's `lakebase_prehook.py --phase post`**. It reads the project /
+   database / principals / job-ids from `terraform output` (no `bundle validate`,
+   no `bundle run`) and triggers the residual data-plane GRANTs, waiting for each:
+   - `setup_data_role` → `GRANT SELECT … TO` the developer group role (GROUP → RO)
    - `setup_dataapi_role` → `GRANT <app SP> TO authenticator` + table DML
 
-Auth is the **`sh-lakebase-cicd` SP** (OAuth M2M) — the same identity the DABs
-pipeline uses, and the one that must own the project so the post-hook can create
-OAuth roles. Required GitHub secrets and the state-backend note are in the
-workflow header.
+Because Terraform already owns the control-plane grants (`roles.tf` superuser,
+`permissions.tf` ACLs, `data_api.tf` enable-API), the post-hook is *just* the two
+data-plane grant jobs — a much thinner script than the DABs post phase.
+
+**Auth** matches sh-lakebase exactly: the Entra **`sh-lakebase-cicd` SP** via
+`azure-client-secret`. The GitHub secrets `DATABRICKS_CLIENT_ID/SECRET` are mapped
+to `ARM_CLIENT_ID/SECRET` (with `ARM_TENANT_ID`) so both the Terraform provider and
+the CLI select the Entra path — *not* OAuth-M2M. Required GitHub Environment
+`vars`/`secrets`, the runner note, and the state-backend note are in the workflow
+header.
 
 ---
 

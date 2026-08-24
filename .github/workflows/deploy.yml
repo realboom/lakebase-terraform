@@ -1,22 +1,29 @@
 name: deploy
 
 # Deploy the Lakebase instance with Terraform, then run the data-plane post-hook
-# jobs (the Postgres GRANTs Terraform can't express) — the same split the DABs
-# pipeline uses, just with `terraform apply` where DABs had its pre-hook + bundle.
+# (the Postgres GRANTs Terraform can't express) — the same split the DABs pipeline
+# uses, with `terraform apply` where DABs had its pre-hook create + bundle deploy.
 #
-# Auth: the sh-lakebase-cicd SP (OAuth M2M) — the SAME identity the DABs pipeline
-# uses. It must OWN the project (it does, because it runs `terraform apply` here)
-# so the post-hook notebooks can create OAuth roles as a superuser.
+# AUTH — Entra ID (Azure AD) service principal via azure-client-secret, matching
+# sh-lakebase's databricks-cicd.yml. The GitHub SECRETS are named
+# DATABRICKS_CLIENT_ID/SECRET (client convention) but they carry the ENTRA SP's
+# app-registration id + secret, so they are mapped into ARM_CLIENT_ID /
+# ARM_CLIENT_SECRET — that selects auth_type=azure-client-secret for BOTH the
+# databricks Terraform provider AND the databricks CLI. Passing them as plain
+# DATABRICKS_CLIENT_ID/SECRET env vars would (wrongly) select OAuth-M2M.
 #
-# Required GitHub secrets (Settings > Secrets and variables > Actions):
-#   DATABRICKS_HOST           https://adb-<id>.<n>.azuredatabricks.net
-#   DATABRICKS_CLIENT_ID      cicd SP application id
-#   DATABRICKS_CLIENT_SECRET  cicd SP OAuth secret
-#   TF_APP_SP_ID              app SP application id (sh-lakebase-app) for the Data API grant
+# Config via a GitHub Environment (dev/prod), mirroring sh-lakebase:
+#   vars:    DATABRICKS_HOST, ARM_TENANT_ID
+#   secrets: DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET  (Entra sh-lakebase-cicd)
+#            TF_APP_SP_ID  (app SP application id, for the Data API grant)
 #
-# NOTE ON STATE: this template uses local state, which does not persist between
-# runs. For real CI point Terraform at a remote backend (e.g. azurerm blob) so the
-# pipeline reconciles the same instance each run instead of trying to re-create it.
+# RUNNER: GitHub-hosted ubuntu is fine here (the One-Env workspace is publicly
+# reachable and this public repo has no self-hosted runner). sh-lakebase uses a
+# self-hosted runner for its own infra reasons — not required for this demo.
+#
+# STATE: this template uses local state, which does not persist between runs. For
+# real CI point Terraform at a remote backend (e.g. azurerm blob) so the pipeline
+# reconciles the same instance each run instead of trying to re-create it.
 
 on:
   workflow_dispatch:
@@ -33,19 +40,36 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: dev
     env:
-      # OAuth M2M — the databricks provider AND the CLI both pick these up.
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
-      # Terraform inputs (workspace host + app SP to grant into the Data API).
-      TF_VAR_workspace_host: ${{ secrets.DATABRICKS_HOST }}
+      # Entra SP -> ARM_* selects azure-client-secret for the TF provider AND CLI.
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      ARM_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      # Terraform inputs. workspace_host = the workspace URL; azure_tenant_id pins
+      # the provider's tenant to match the Entra SP.
+      TF_VAR_workspace_host: ${{ vars.DATABRICKS_HOST }}
+      TF_VAR_azure_tenant_id: ${{ vars.ARM_TENANT_ID }}
       TF_VAR_app_service_principal_id: ${{ secrets.TF_APP_SP_ID }}
-      # azure-cli tenant pin is not used in CI (SP auth), so leave it empty.
-      TF_VAR_azure_tenant_id: ""
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify auth resolves as the service principal
+        run: |
+          # Fail fast if creds are missing, and assert we authenticated AS the SP —
+          # not a fallback identity. For an SP, current-user userName == client id.
+          if [ -z "${ARM_CLIENT_ID}" ] || [ -z "${ARM_CLIENT_SECRET}" ] || [ -z "${ARM_TENANT_ID}" ]; then
+            echo "::error::DATABRICKS_CLIENT_ID/SECRET (secrets) + ARM_TENANT_ID/DATABRICKS_HOST (vars) must be set in the 'dev' GitHub Environment."
+            exit 1
+          fi
+      - uses: databricks/setup-cli@main
+      - name: Assert running as the SP
+        run: |
+          ME=$(databricks current-user me -o json | jq -r '.userName')
+          [ "$ME" = "$ARM_CLIENT_ID" ] || { echo "::error::authenticated as '$ME', not the SP ($ARM_CLIENT_ID)"; exit 1; }
+          echo "[auth] running as service principal $ME"
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -56,36 +80,10 @@ jobs:
           terraform init -input=false
           terraform apply -input=false -auto-approve
 
-      - uses: databricks/setup-cli@main
-
-      # ---- Post-hook: run the data-plane GRANT jobs with the TF outputs ----
+      # ---- Post-hook: the data-plane GRANTs Terraform can't express ----
+      # Bundle-free port of sh-lakebase's `lakebase_prehook.py --phase post`: reads
+      # the project / database / principals / job-ids from `terraform output` and
+      # runs the setup_data_role / setup_dataapi_role jobs (jobs run-now), waiting
+      # for each to succeed. Auth comes from the ARM_* env above (azure-client-secret).
       - name: Post-hook data-plane grants
-        run: |
-          set -euo pipefail
-          OUT=$(terraform output -json)
-          PROJECT=$(echo "$OUT"   | jq -r '.project_id.value')
-          DB=$(echo "$OUT"        | jq -r '.postgres_database.value')
-          DEV_GROUP=$(echo "$OUT" | jq -r '.developer_group.value')
-          APP_SP=$(echo "$OUT"    | jq -r '.app_service_principal_id.value')
-          DATA_JOB=$(echo "$OUT"  | jq -r '.setup_data_role_job_id.value')
-          API_JOB=$(echo "$OUT"   | jq -r '.setup_dataapi_role_job_id.value')
-
-          # NOTE: `jobs run-now --json` takes job_id INSIDE the JSON, not as a
-          # positional arg (the CLI rejects a positional id alongside --json).
-
-          # Developer group -> read-only SELECT on the database (direct-connection).
-          if [ -n "$DEV_GROUP" ] && [ "$DEV_GROUP" != "null" ] && [ "$DATA_JOB" != "null" ]; then
-            echo "Granting SELECT to group $DEV_GROUP on $PROJECT/$DB"
-            databricks jobs run-now --json "$(jq -n \
-              --argjson job "$DATA_JOB" --arg p "$PROJECT" --arg d "$DB" --arg i "$DEV_GROUP" \
-              '{job_id:$job,job_parameters:{project_id:$p,database:$d,identity:$i,identity_type:"GROUP",privileges:"SELECT"}}')"
-          fi
-
-          # App SP -> Data API (GRANT sp TO authenticator + DML). data_api.tf already
-          # enabled the API, so the authenticator role exists.
-          if [ -n "$APP_SP" ] && [ "$APP_SP" != "null" ] && [ "$API_JOB" != "null" ]; then
-            echo "Wiring SP $APP_SP into the Data API on $PROJECT/$DB"
-            databricks jobs run-now --json "$(jq -n \
-              --argjson job "$API_JOB" --arg p "$PROJECT" --arg d "$DB" --arg i "$APP_SP" \
-              '{job_id:$job,job_parameters:{project_id:$p,database:$d,identity:$i}}')"
-          fi
+        run: python3 scripts/posthook.py --from-terraform
