@@ -163,8 +163,18 @@ variable "synced_source_table" {
   default     = "system.access.audit"
 }
 
+variable "synced_schema" {
+  description = <<-EOT
+    Postgres schema the synced table lands in (created if missing). Defaults to
+    `test` — isolated from `public` so Change Data Feed can be enabled on just
+    this schema (CDF is per-schema) without capturing the other public tables.
+  EOT
+  type        = string
+  default     = "test"
+}
+
 variable "synced_table_leaf" {
-  description = "Leaf table name created in the catalog's public schema (the sync target)."
+  description = "Leaf table name created in the synced_schema (the sync target)."
   type        = string
   default     = "audit"
 }

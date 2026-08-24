@@ -16,7 +16,7 @@
 # =============================================================================
 
 resource "databricks_postgres_synced_table" "this" {
-  synced_table_id = "${local.catalog_name}.public.${var.synced_table_leaf}"
+  synced_table_id = "${local.catalog_name}.${var.synced_schema}.${var.synced_table_leaf}"
 
   spec = {
     source_table_full_name             = var.synced_source_table
