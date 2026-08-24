@@ -1,0 +1,78 @@
+# Example tfvars — this demo's own `terra` instance in the dev workspace.
+# Copy to terraform.tfvars and fill in the workspace host (+ SP id if granting it).
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# `terra` is kept distinct from the DABs-managed risk/isops instances that
+# already exist in the same workspace, so this apply never collides with them.
+# One tfvars file = one Lakebase instance, the same "copy a file per stream"
+# model the DABs resources/<stream>/lakebase_<stream>.yml uses.
+
+# --- Target workspace (from the sh-lakebase terraform/ infra stack) ------------
+# terraform -chdir=../sh-lakebase/terraform output -raw workspace_url
+workspace_host = "https://adb-XXXXXXXXXXXX.NN.azuredatabricks.net"
+
+# Pin auth to the FE One-Env sandbox tenant when your az login is a multi-tenant
+# guest (leave "" otherwise). dbdevfieldeng.onmicrosoft.com:
+azure_tenant_id = "bf465dc7-3bc8-4944-b018-092572b5c20d"
+
+# --- Instance identity ---------------------------------------------------------
+environment  = "dev"
+value_stream = "terra"     # -> project/instance dev-sh-lkb-terra
+pg_version   = 17          # autoscaling API honors this (legacy path was pg16-only)
+retention_days = 7
+
+# --- Autoscaling endpoint compute ----------------------------------------------
+autoscaling_min_cu = 0.5   # dev floor.  prod: 8
+autoscaling_max_cu = 2     # dev ceiling. prod: 24
+suspend_timeout    = "300s" # scale-to-zero after 5m idle (ignored when HA is on)
+
+# prod HA group: 1 primary + 2 readable secondaries, always-on. dev leaves false.
+enable_readable_secondaries = false
+ha_node_count               = 3
+
+# --- UC catalog + synced table -------------------------------------------------
+# catalog_name is DERIVED as <env>_sh_lkb_<value_stream>_healow when left unset
+# (dev + terra -> dev_sh_lkb_terra_healow). Uncomment only to override.
+# catalog_name      = "dev_sh_lkb_terra_healow"
+postgres_database   = "databricks_postgres"
+synced_source_table = "system.access.audit"
+synced_table_leaf   = "audit"
+synced_primary_keys = ["event_id"]
+
+# Pipeline checkpoint storage — the sh-lakebase project catalog:
+# terraform -chdir=../sh-lakebase/terraform output -raw catalog_name
+pg_storage_catalog = "shlkb_dev"
+pg_storage_schema  = "default"
+
+# --- Data API ------------------------------------------------------------------
+# Enables the Data API on the database (replaces the manual "Enable Data API"
+# click). NOTE: this enables the API surface only — granting an SP into it
+# (GRANT <sp> TO authenticator) is still the setup_dataapi_role job.
+enable_data_api  = true
+data_api_schemas = ["public"]
+
+# --- Refresh job ---------------------------------------------------------------
+create_refresh_job = true
+refresh_cron       = "0 0 9 * * ?"     # daily 09:00
+refresh_timezone   = "America/Denver"
+
+# --- Permissions ---------------------------------------------------------------
+# Reuse the EXISTING risk identities — no new SP/group for this demo.
+# App SP = sh-lakebase-app (the same SP the risk stream uses). This client id
+# changes on a sandbox rebuild — refresh with:
+#   terraform -chdir=../sh-lakebase/terraform output -raw app_client_id
+app_service_principal_id = "e6906dbc-3d2f-488f-b904-dba0a4bcfd16"
+developer_group          = "SH_LKB_RISK_DEVELOPER"
+
+# Postgres OAuth roles (roles.tf):
+#   enterprise admin -> databricks_superuser + createdb/createrole/bypassrls
+#   developer group  -> plain login role (read-only table grants via setup_data_role)
+enterprise_admin_group = "SH_ENTERPRISE_ADMIN"
+
+# environment + value_stream tags are added automatically — don't set them here.
+custom_tags = {
+  project     = "sh-lakebase"
+  cost_center = "data-architecture"
+  managed_by  = "terraform"
+}

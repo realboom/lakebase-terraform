@@ -1,0 +1,22 @@
+# Terraform state — may contain sensitive values; never commit.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Real variable values (keep only terraform.tfvars.example in git).
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Plan output.
+tfplan
+*.tfplan
+*.out
+
+.DS_Store
