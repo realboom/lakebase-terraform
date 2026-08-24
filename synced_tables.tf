@@ -31,12 +31,15 @@ resource "databricks_postgres_synced_table" "this" {
     }
   }
 
-  # The catalog (+ database) must exist before the sync targets it, and the
-  # deployer needs read on the source (system.access) before creating the sync.
+  # The catalog (+ database) must exist before the sync targets it; the deployer
+  # needs read on the source (system.access) AND create on the pipeline storage
+  # schema (pg_storage_catalog.pg_storage_schema) before the pipeline runs.
   depends_on = [
     databricks_postgres_catalog.this,
     databricks_grant.system_catalog,
     databricks_grant.system_access_schema,
+    databricks_grant.pg_storage_catalog,
+    databricks_grant.pg_storage_schema,
   ]
 }
 
