@@ -44,8 +44,7 @@ post-hook steps into declarative config.
 ## What this stack does
 
 `databricks_postgres_project` **is** the autoscaling project the bundle
-declares — created directly, no legacy instance, no pre-hook, no bind. Five files
-carry the whole deployment:
+declares — created directly, no legacy instance, no pre-hook, no bind:
 
 | File | Resource | Replaces (DABs) |
 |------|----------|-----------------|
@@ -55,11 +54,34 @@ carry the whole deployment:
 | `synced_tables.tf` | `databricks_postgres_synced_table` + `databricks_job` | `postgres_synced_tables` + refresh `jobs` |
 | `data_api.tf` | `databricks_postgres_data_api` | the manual "Enable Data API" click |
 | `roles.tf` | `databricks_postgres_role` (admin + developer groups) | pre-hook `grant_admin_superuser` (role API) |
+| `grants.tf` | `databricks_grant` (system read for the deployer) | infra `catalog.tf` system grants |
 | `permissions.tf` | `databricks_permissions` (`database_project_name`) | the project `permissions:` block |
+| `posthook.tf` + `src/*.py` | `databricks_notebook` + `databricks_job` | the DABs `setup_data_role` / `setup_dataapi_role` jobs |
+| `.github/workflows/deploy.yml` | GitHub Actions | the DABs GitHub pipeline |
 
 The project auto-creates its `production` branch and primary read-write endpoint;
 `endpoint.tf` adopts that primary (`replace_existing = true`) to manage its
 compute window declaratively.
+
+## The GitHub Actions pipeline (Terraform + post-hook)
+
+Terraform can't run SQL inside Postgres, so the per-table GRANTs stay a job — but
+that job is deployed *by* Terraform (`posthook.tf` imports `src/*.py` as notebooks
+and wraps each in a parameterized `databricks_job`). `.github/workflows/deploy.yml`
+does the two-phase deploy, exactly mirroring the DABs pre-hook + bundle + post-hook
+split:
+
+1. **`terraform apply`** — project, endpoint, catalog, synced table, Data API,
+   roles, ACLs (everything declarative).
+2. **post-hook** — `jobs run-now` on the two deployed jobs, fed from
+   `terraform output`, to run the residual data-plane GRANTs:
+   - `setup_data_role` → `GRANT SELECT … TO` the developer group role
+   - `setup_dataapi_role` → `GRANT <app SP> TO authenticator` + table DML
+
+Auth is the **`sh-lakebase-cicd` SP** (OAuth M2M) — the same identity the DABs
+pipeline uses, and the one that must own the project so the post-hook can create
+OAuth roles. Required GitHub secrets and the state-backend note are in the
+workflow header.
 
 ---
 

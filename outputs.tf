@@ -46,6 +46,32 @@ output "enterprise_admin_role" {
   value       = var.enterprise_admin_group != "" ? databricks_postgres_role.enterprise_admin[0].name : null
 }
 
+# --- Post-hook wiring (consumed by .github/workflows/deploy.yml) ---------------
+output "postgres_database" {
+  description = "Postgres database the post-hook grants target."
+  value       = var.postgres_database
+}
+
+output "developer_group" {
+  description = "Developer group to grant SELECT (setup_data_role). Empty = skip."
+  value       = var.developer_group
+}
+
+output "app_service_principal_id" {
+  description = "App SP to wire into the Data API (setup_dataapi_role). Empty = skip."
+  value       = var.app_service_principal_id
+}
+
+output "setup_data_role_job_id" {
+  description = "Job id of the direct-connection data-grant post-hook (null when deploy_posthook = false)."
+  value       = var.deploy_posthook ? databricks_job.setup_data_role[0].id : null
+}
+
+output "setup_dataapi_role_job_id" {
+  description = "Job id of the Data API grant post-hook (null when deploy_posthook = false)."
+  value       = var.deploy_posthook ? databricks_job.setup_dataapi_role[0].id : null
+}
+
 output "developer_role" {
   description = "Postgres role name for the developer group. Null when skipped."
   value       = var.developer_group != "" ? databricks_postgres_role.developer[0].name : null

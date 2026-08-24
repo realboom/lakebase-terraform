@@ -192,6 +192,22 @@ variable "pg_storage_schema" {
   default     = "default"
 }
 
+variable "deploy_posthook" {
+  description = <<-EOT
+    Deploy the post-hook notebooks (src/*.py) + their jobs — the data-plane GRANTs
+    Terraform can't express. The GitHub Actions pipeline runs them after apply.
+    Set false to skip them (e.g. a pure infra-only demo).
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "posthook_workspace_dir" {
+  description = "Workspace directory the post-hook notebooks are deployed to."
+  type        = string
+  default     = "/Workspace/Shared/lakebase-terraform"
+}
+
 variable "manage_source_grants" {
   description = <<-EOT
     Grant the deploying identity USE_CATALOG on `system` + USE_SCHEMA/SELECT on
