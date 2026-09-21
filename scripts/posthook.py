@@ -134,9 +134,11 @@ def main() -> int:
     failures: list[str] = []
 
     # Developer GROUP -> read-only SELECT (direct-connection). GROUP => SELECT per policy.
+    # A missing job id means the post-hook jobs weren't deployed (deploy_posthook=false)
+    # — skip that grant, don't fail. (An ABAC-only apply has no data-role job.)
     if dev_group and dev_group not in ("", "null"):
         if not data_job or data_job in ("", "null"):
-            failures.append(f"no setup_data_role job id for group {dev_group}")
+            log(f"skipping setup_data_role for group {dev_group}: no job (deploy_posthook=false).")
         else:
             ok = run_job(data_job, {
                 "project_id": project, "database": database,
@@ -150,7 +152,7 @@ def main() -> int:
     # enabled the API (so `authenticator` exists).
     if app_sp and app_sp not in ("", "null"):
         if not api_job or api_job in ("", "null"):
-            failures.append(f"no setup_dataapi_role job id for SP {app_sp}")
+            log(f"skipping setup_dataapi_role for SP {app_sp}: no job (deploy_posthook=false).")
         else:
             ok = run_job(api_job, {
                 "project_id": project, "database": database, "identity": app_sp,

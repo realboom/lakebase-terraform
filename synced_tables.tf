@@ -16,6 +16,8 @@
 # =============================================================================
 
 resource "databricks_postgres_synced_table" "this" {
+  count = var.deploy_synced_table ? 1 : 0
+
   synced_table_id = "${local.catalog_name}.${var.synced_schema}.${var.synced_table_leaf}"
 
   spec = {
@@ -49,7 +51,7 @@ resource "databricks_postgres_synced_table" "this" {
 # with a pipeline_task. The pipeline id comes from the synced table's computed
 # status, so nothing is hardcoded.
 resource "databricks_job" "refresh" {
-  count = var.create_refresh_job ? 1 : 0
+  count = var.deploy_synced_table && var.create_refresh_job ? 1 : 0
 
   name = "[SH Lakebase] Refresh ${var.value_stream} ${var.synced_table_leaf} snapshot (${var.environment})"
 
@@ -62,7 +64,7 @@ resource "databricks_job" "refresh" {
   task {
     task_key = var.synced_table_leaf
     pipeline_task {
-      pipeline_id = databricks_postgres_synced_table.this.status.pipeline_id
+      pipeline_id = databricks_postgres_synced_table.this[0].status.pipeline_id
     }
   }
 }

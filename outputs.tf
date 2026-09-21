@@ -27,13 +27,13 @@ output "catalog_name" {
 }
 
 output "synced_table" {
-  description = "Three-part name of the synced table created in Postgres."
-  value       = databricks_postgres_synced_table.this.synced_table_id
+  description = "Three-part name of the synced table created in Postgres (null when deploy_synced_table = false)."
+  value       = var.deploy_synced_table ? databricks_postgres_synced_table.this[0].synced_table_id : null
 }
 
 output "refresh_job_url" {
-  description = "URL of the snapshot-refresh job (null when create_refresh_job = false)."
-  value       = var.create_refresh_job ? "${var.workspace_host}/jobs/${databricks_job.refresh[0].id}" : null
+  description = "URL of the snapshot-refresh job (null when the synced table / refresh job is skipped)."
+  value       = var.deploy_synced_table && var.create_refresh_job ? "${var.workspace_host}/jobs/${databricks_job.refresh[0].id}" : null
 }
 
 output "data_api_url" {

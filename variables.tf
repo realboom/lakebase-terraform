@@ -157,6 +157,17 @@ variable "catalog_name" {
 }
 
 # --- Synced table (UC Delta source -> Postgres) --------------------------------
+variable "deploy_synced_table" {
+  description = <<-EOT
+    Create the UC->Postgres synced table (and its refresh job). Set false to stand
+    up JUST the Lakebase instance + roles + catalog — e.g. an ABAC-masking-only
+    demo that builds its own Postgres tables and doesn't need a synced source.
+    Skipping it also avoids the ~40-min synced-table pipeline provisioning.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "synced_source_table" {
   description = "Three-part UC name of the Delta source table to sync into Postgres."
   type        = string
