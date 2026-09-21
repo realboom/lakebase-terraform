@@ -109,6 +109,9 @@ def main() -> int:
                     help="App SP application id to wire into the Data API via setup_dataapi_role. Empty/omitted = skip.")
     ap.add_argument("--data-role-job-id", default=None, help="Job id of the setup_data_role job.")
     ap.add_argument("--dataapi-role-job-id", default=None, help="Job id of the setup_dataapi_role job.")
+    ap.add_argument("--abac-job-id", default=None,
+                    help="Job id of the ABAC column-masking demo job. Omitted/empty (the default when "
+                         "deploy_abac_demo=false) => skip. Schema/group names come from the job's own defaults.")
     ap.add_argument("--profile", default=None, help="databricks CLI profile (omit in CI; use env auth).")
     ap.add_argument("--dry-run", action="store_true", help="Print the planned job runs; do not execute.")
     args = ap.parse_args()
@@ -121,6 +124,7 @@ def main() -> int:
     app_sp = args.app_sp if args.app_sp is not None else out.get("app_service_principal_id")
     data_job = args.data_role_job_id or out.get("setup_data_role_job_id")
     api_job = args.dataapi_role_job_id or out.get("setup_dataapi_role_job_id")
+    abac_job = args.abac_job_id or out.get("setup_abac_masking_job_id")
 
     if not project:
         raise SystemExit("Missing project_id (pass --project-id or --from-terraform).")
@@ -153,6 +157,16 @@ def main() -> int:
             }, args.profile, args.dry_run)
             if not ok:
                 failures.append(f"setup_dataapi_role for SP {app_sp}")
+
+    # ABAC column-masking demo (only when deploy_abac_demo=true, i.e. the job id
+    # is present). Schema + group names come from the job's parameter defaults, so
+    # only project/database are passed here.
+    if abac_job and abac_job not in ("", "null"):
+        ok = run_job(abac_job, {
+            "project_id": project, "database": database,
+        }, args.profile, args.dry_run)
+        if not ok:
+            failures.append("setup_abac_masking (ABAC demo)")
 
     if failures:
         raise SystemExit("ERROR: data-plane grant(s) failed: " + "; ".join(failures))

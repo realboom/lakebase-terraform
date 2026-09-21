@@ -72,6 +72,11 @@ output "setup_dataapi_role_job_id" {
   value       = var.deploy_posthook ? databricks_job.setup_dataapi_role[0].id : null
 }
 
+output "setup_abac_masking_job_id" {
+  description = "Job id of the ABAC column-masking demo (null when deploy_abac_demo = false)."
+  value       = var.deploy_abac_demo ? databricks_job.setup_abac_masking[0].id : null
+}
+
 output "developer_role" {
   description = "Postgres role name for the developer group. Null when skipped."
   value       = var.developer_group != "" ? databricks_postgres_role.developer[0].name : null

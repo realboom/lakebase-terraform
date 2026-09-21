@@ -157,6 +157,50 @@ DABs one-file-per-stream model.
 For a **prod-shaped** apply, set `autoscaling_min_cu`/`max_cu` higher (e.g. 8/24),
 `enable_readable_secondaries = true`, and `ha_node_count = 3`.
 
+## ABAC column masking (serving layer)
+
+Unity Catalog ABAC (row filters / column masks) governs only the **analytical**
+path — it does **not** follow data synced into the Lakebase Postgres **serving**
+layer. So the Scripius/SelectHealth answer to "contractors shouldn't see the data
+in Lakebase" is to replicate Dan's two-group ABAC model **natively in Postgres**:
+
+| Group | UC ABAC | Postgres serving layer |
+| --- | --- | --- |
+| `SCRP_ABAC_EXEMPT` | in the EXCEPT list → unmasked | `pg_has_role(... 'member')` true → unmasked |
+| `SCRP_RXVS_RESTRICTED` | not in EXCEPT → masked (default) | masked branch of the view |
+
+The control point is a `security_barrier` view (`sh_pharmacy_secure.member_rx_secure`)
+that runs with the view **owner's** rights: consumers get `SELECT` on the view and
+**no** base-table access, so the `pg_has_role` `CASE` is un-bypassable.
+
+The two groups are registered as **OAuth GROUP roles** in `roles.tf`
+(`databricks_postgres_role`, `identity_type = "GROUP"`), so real SelectHealth group
+members map into them over OAuth (`postgres_role` = the group name, which the view's
+`pg_has_role` check and the grants both reference).
+
+- **`sql/abac_masking.sql`** — the canonical, hand-runnable copy. Paste it into the
+  Lakebase SQL editor; it builds the schema/table/view and grants, and carries a
+  verification block. Change the 4 identifiers in the header to reuse it. (It does
+  **not** create the group roles — those are OAuth roles owned by `roles.tf`.)
+- **`src/setup_abac_masking.py`** + **`posthook.tf`** — the parameterized deployer.
+  Set `deploy_abac_demo = true` and it ships as a job the pipeline runs after apply
+  (self-skips when false — the job id output is `null`). Override `raw_schema` /
+  `secure_schema` / `abac_exempt_group` / `abac_restricted_group` to retarget. The
+  same flag also provisions the two OAuth GROUP roles in `roles.tf`.
+
+```bash
+terraform apply -var deploy_abac_demo=true
+python3 scripts/posthook.py --from-terraform     # runs the masking job too, when deployed
+```
+
+**Verification** is from a **real group member's** OAuth session, not the admin/SP:
+a control-plane GROUP role can't be `SET ROLE`'d into by the identity that created
+it. Connect as a member of `SCRP_RXVS_RESTRICTED` (masked) or `SCRP_ABAC_EXEMPT`
+(unmasked) and read the view; flip a user by changing their group membership.
+Keep the two groups mutually exclusive — a user in both maps to a single group role
+(selection not controllable). A true `rolsuper` always sees unmasked;
+`databricks_superuser` is not `rolsuper`, so it behaves like a normal role.
+
 ## Scope / caveats
 
 - **Demo, not production.** Reuses the FE One-Env sandbox substrate; everything is

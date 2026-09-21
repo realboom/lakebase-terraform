@@ -23,9 +23,11 @@
 # =============================================================================
 
 locals {
-  production_branch = "${databricks_postgres_project.this.name}/branches/production"
-  admin_role_id     = "grp-${lower(replace(var.enterprise_admin_group, "/[^A-Za-z0-9-]/", "-"))}"
-  dev_role_id       = "grp-${lower(replace(var.developer_group, "/[^A-Za-z0-9-]/", "-"))}"
+  production_branch     = "${databricks_postgres_project.this.name}/branches/production"
+  admin_role_id         = "grp-${lower(replace(var.enterprise_admin_group, "/[^A-Za-z0-9-]/", "-"))}"
+  dev_role_id           = "grp-${lower(replace(var.developer_group, "/[^A-Za-z0-9-]/", "-"))}"
+  abac_exempt_role_id   = "grp-${lower(replace(var.abac_exempt_group, "/[^A-Za-z0-9-]/", "-"))}"
+  abac_restrict_role_id = "grp-${lower(replace(var.abac_restricted_group, "/[^A-Za-z0-9-]/", "-"))}"
 }
 
 # --- Enterprise admin: databricks_superuser + all role attributes --------------
@@ -60,6 +62,42 @@ resource "databricks_postgres_role" "developer" {
   spec = {
     identity_type = "GROUP"
     postgres_role = var.developer_group
+    auth_method   = "LAKEBASE_OAUTH_V1"
+  }
+}
+
+# --- ABAC masking groups: OAuth GROUP roles so real SelectHealth group members --
+#     map into them over OAuth. The masking VIEW keys off pg_has_role(current_user,
+#     'SCRP_ABAC_EXEMPT','member'); the SELECT-on-view GRANTs (data-plane SQL) come
+#     from the setup_abac_masking job — these resources just establish the two role
+#     principals. postgres_role = the group name, so the view's role check and the
+#     grants both reference the same identifier.
+#     NOTE: a control-plane GROUP role cannot be SET ROLE'd into by its creator, so
+#     masking is verified from a real group member's OAuth session (not the admin SP).
+resource "databricks_postgres_role" "abac_exempt" {
+  count = var.deploy_abac_demo && var.abac_exempt_group != "" ? 1 : 0
+
+  role_id          = local.abac_exempt_role_id
+  parent           = local.production_branch
+  replace_existing = true
+
+  spec = {
+    identity_type = "GROUP"
+    postgres_role = var.abac_exempt_group
+    auth_method   = "LAKEBASE_OAUTH_V1"
+  }
+}
+
+resource "databricks_postgres_role" "abac_restricted" {
+  count = var.deploy_abac_demo && var.abac_restricted_group != "" ? 1 : 0
+
+  role_id          = local.abac_restrict_role_id
+  parent           = local.production_branch
+  replace_existing = true
+
+  spec = {
+    identity_type = "GROUP"
+    postgres_role = var.abac_restricted_group
     auth_method   = "LAKEBASE_OAUTH_V1"
   }
 }

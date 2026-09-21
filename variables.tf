@@ -218,6 +218,37 @@ variable "posthook_workspace_dir" {
   default     = "/Workspace/Shared/lakebase-terraform"
 }
 
+variable "deploy_abac_demo" {
+  description = <<-EOT
+    Deploy the ABAC-equivalent column-masking demo (src/setup_abac_masking.py) +
+    its job. This builds the Scripius two-group masking pattern natively in the
+    Lakebase Postgres serving layer (a security_barrier view keyed off
+    pg_has_role), because UC ABAC does NOT follow data synced into Postgres.
+    Independent of deploy_posthook — set false to skip the demo. See
+    sql/abac_masking.sql for the canonical, hand-runnable copy.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "abac_exempt_group" {
+  description = <<-EOT
+    Group whose members see UNMASKED data — the Postgres mirror of the UC ABAC
+    EXCEPT list. Default SCRP_ABAC_EXEMPT.
+  EOT
+  type        = string
+  default     = "SCRP_ABAC_EXEMPT"
+}
+
+variable "abac_restricted_group" {
+  description = <<-EOT
+    Group whose members see MASKED data (default-deny) — not in the EXCEPT list.
+    Default SCRP_RXVS_RESTRICTED.
+  EOT
+  type        = string
+  default     = "SCRP_RXVS_RESTRICTED"
+}
+
 variable "manage_source_grants" {
   description = <<-EOT
     Grant the deploying identity USE_CATALOG on `system` + USE_SCHEMA/SELECT on
